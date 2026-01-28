@@ -1,0 +1,28 @@
+name: Deploy VisCo2Fly
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Frontend
+        run: |
+          # Go into your specific local folder to find the React app
+          cd so72-codes-local/frontend 
+          npm install
+          npm run build
+
+      - name: Copy to Oracle Server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_KEY }}
+          # This sends your built frontend and your backend folder
+          source: "so72-codes-local/frontend/dist/*,so72-codes-local/backend/*"
+          target: "/var/www/vis-co2-fly"
+          strip_components: 2 # This "strips" 'so72-codes-local' so the folders land correctly

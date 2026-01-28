@@ -62,7 +62,7 @@ const FlightSearchForm = ({ onSearch, loading }) => {
     // helps to prevent excessive API calls while user is still typing
     debounceTimeout.current = setTimeout(async () => {
       try {
-        const response = await fetch(`http://api/airport-search?keyword=${value}`);
+        const response = await fetch(`/api/airport-search?keyword=${value}`);
         const data = await response.json();
         // update suggestions based on what typed in the input field 
         if (type === 'origin') setOriginSuggestions(data.data || []);

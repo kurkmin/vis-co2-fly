@@ -12,31 +12,19 @@ require('dotenv').config();
 // import dependencies
 const express = require("express");
 // cors for frontend communication
-const cors = require('cors'); 
+const cors = require('cors');
 // http client for external API calls
-const axios = require('axios'); 
-// Amadeus API SDK
-const Amadeus = require("amadeus"); 
+const axios = require('axios');
 // Duffel API SDK
-const { Duffel } = require('@duffel/api'); 
+const { Duffel } = require('@duffel/api');
 
 // initialise express 
-const app = express(); 
+const app = express();
 
 // enable to parse JSON requests from frontend
-app.use(express.json()); 
+app.use(express.json());
 // enable cors  
-app.use(cors()); 
-
-// initialize Amadeus SDK with API credentials 
-// The code below was taken from a post by Amadeus: https://github.com/amadeus4dev/amadeus-node (last accessed 2025 07-27)
-// BEGIN Copied Code 
-const amadeus = new Amadeus({
-  clientId: process.env.AMADEUS_CLIENT_ID,
-  clientSecret: process.env.AMADEUS_CLIENT_SECRET,
-  hostname: 'production' 
-});
-// END Copied Code 
+app.use(cors());
 
 // initialize Duffel SDK with API credentials 
 // The code below was taken from a post by Duffel: https://github.com/duffelhq/duffel-api-javascript/blob/main/README.md (last accessed 2025 07-27)
@@ -46,18 +34,30 @@ const duffel = new Duffel({
 });
 // END Copied Code 
 
+// Check if required environment variables are set
+if (!process.env.DUFFEL_API_KEY) {
+  console.error('ERROR: DUFFEL_API_KEY is not set in environment variables');
+  console.error('Please create a .env file in the backend directory with your Duffel API key');
+  console.error('See .env.example for the required format');
+}
+
+if (!process.env.GOOGLE_API_KEY) {
+  console.error('WARNING: GOOGLE_API_KEY is not set in environment variables');
+  console.error('CO2 emissions calculations will not work without this key');
+}
+
 // deduplication setup
 // simple request deduplication cache
 const requestCache = new Map();
 // 30 seconds
-const CACHE_DURATION = 30000; 
+const CACHE_DURATION = 30000;
 // mutex for flight search endpoint - prevents sending duplicated requests
 let flightSearchInProgress = false;
 // request counter for debugging
 let requestCounter = 0;
 
-// transform Duffel data structure to match Amadeus's one
-function transformDuffelToAmadeus(duffelOffer) {
+// transform Duffel data structure to match expected frontend format
+function transformDuffelData(duffelOffer) {
   return {
     id: duffelOffer.id,
     // transform itineraries
@@ -92,88 +92,54 @@ function transformDuffelToAmadeus(duffelOffer) {
   };
 }
 
-// Airport autocomplete search - dual API integration
-// Duffel API will be used as fallback if Amadeus API fails
-// primary: Amadeus Airport Search API; secondary: Duffel Suggestion API
+// Airport autocomplete search using Duffel API
 app.get("/airport-search", async (req, res) => {
   const { keyword } = req.query;
   // validate input - require at least 2 characters to avoid too many results
   if (!keyword || keyword.length < 2) {
     return res.json({ data: [] });
   }
-  // try Amadeus first, fallback to Duffel if it fails
+
   try {
-    console.log("trying Amadeus airport search...");
-    // call Amadeus API to search for airports matching the keyword
-    // The code below was taken from a post by Amadeus: https://developers.amadeus.com/blog/airport-autocomplete-jquery-ajax (last accessed 2025 07-27)
+    console.log("Searching airports with Duffel API...");
+    // The code below was taken from a post by Duffel: https://duffel.com/docs/api/places/get-place-suggestions?ref=duffel.ghost.io (last accessed 2025 07-27)
     // BEGIN Copied Code 
-    const response = await amadeus.referenceData.locations.get({
-      keyword: keyword,
-      subType: 'AIRPORT',
+    const response = await duffel.suggestions.list({
+      query: keyword,
     });
     // END Copied Code 
 
-    // format the Amadeus data for communication with frontend 
-    const formattedData = response.data.map(location => ({
-      // 3-letter airport code 
-      iataCode: location.iataCode, 
-      // airport name
-      name: location.name, 
-      // airport's city
-      cityName: location.address?.cityName || '', 
-      // airport's country
-      countryName: location.address?.countryName || '', 
-      // what user can see from drop-down menu
-      displayName: `${location.iataCode} - ${location.name}${location.address?.cityName ? ', ' + location.address.cityName : ''}${location.address?.countryName ? ', ' + location.address.countryName : ''}`
-    }));
+    // format the Duffel response data for communication with frontend 
+    const formattedData = response.data
+      // only include airports
+      .filter(suggestion => suggestion.type === 'airport')
+      .map(airport => ({
+        // 3-letter airport code 
+        iataCode: airport.iata_code,
+        // airport name
+        name: airport.name,
+        // airport's city 
+        cityName: airport.city?.name || '',
+        // airport's country 
+        countryName: airport.city?.country?.name || '',
+        // what user can see from drop-down menu
+        displayName: `${airport.iata_code} - ${airport.name}${airport.city?.name ? ', ' + airport.city.name : ''}${airport.city?.country?.name ? ', ' + airport.city.country.name : ''}`
+      }));
 
-    console.log(`Amadeus airport search successful: ${formattedData.length} results`);
+    console.log(`Duffel airport search successful: ${formattedData.length} results`);
     res.json({ data: formattedData });
 
-  } catch (amadeusError) {
-    console.log("Amadeus airport search failed, trying Duffel fallback...");
-    // fallback (Duffel) api 
-    // The code below was taken from a post by Duffel: https://duffel.com/docs/api/places/get-place-suggestions?ref=duffel.ghost.io (last accessed 2025 07-27)
-    // BEGIN Copied Code 
-    try {
-      const response = await duffel.suggestions.list({
-        query: keyword,
-      });
-    // END Copied Code 
-
-      // format the Duffel response data for communication with frontend 
-      const formattedData = response.data
-      // only include airports
-        .filter(suggestion => suggestion.type === 'airport') 
-        .map(airport => ({
-          // 3-letter airport code 
-          iataCode: airport.iata_code, 
-          // airport name
-          name: airport.name, 
-          // airport's city 
-          cityName: airport.city?.name || '', 
-          // airport's country 
-          countryName: airport.city?.country?.name || '', 
-          // what user can see from drop-down menu
-          displayName: `${airport.iata_code} - ${airport.name}${airport.city?.name ? ', ' + airport.city.name : ''}${airport.city?.country?.name ? ', ' + airport.city.country.name : ''}`
-        }));
-
-      console.log(`Duffel airport search fallback successful: ${formattedData.length} results`);
-      res.json({ data: formattedData });
-
-    } catch (duffelError) {
-      console.error("Both Amadeus and Duffel airport search failed");
-      console.error("Duffel error:", duffelError.response ? duffelError.response.data : duffelError.message);
-      // Return error response with empty data array to prevent frontend crashes
-      res.status(500).json({ error: 'Failed to search airports with both APIs', data: [] });
-    }
+  } catch (error) {
+    console.error("Duffel airport search failed:");
+    console.error("Error details:", error.response ? error.response.data : error.message);
+    console.error("Full error:", error);
+    // Return error response with empty data array to prevent frontend crashes
+    res.status(500).json({ error: 'Failed to search airports', data: [] });
   }
 });
 
 
-// Flight Search - dual API integration 
-// Duffel API will be used as fallback if Amadeus API fails
-// primary: Amadeus Flight Offers Search API; secondary: Duffel Offers Requests API
+// Flight Search using Duffel API
 // For CO2 emission, Google Travel Impact Model API is used to calculate 
 // 1. the typical CO2 emission for a given route    
 // 2. the CO2 emission of each journey 
@@ -205,7 +171,7 @@ app.post("/date", async (req, res) => {
         return res.json(cached.data);
       } else {
         // remove expired cache
-        requestCache.delete(cacheKey); 
+        requestCache.delete(cacheKey);
       }
     }
     // generate unique request ID for tracking
@@ -226,9 +192,9 @@ app.post("/date", async (req, res) => {
 // extract the flight search logic into a separate function
 async function processFlightSearch({ departure, arrival, locationDeparture, locationArrival, adults, cabinClass, cacheKey, requestId }) {
   // initialize Google Travel Impact Model API credentials 
-  const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY; 
+  const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
   // typical CO2 emissions data 
-  let typicalEmissions = null; 
+  let typicalEmissions = null;
 
   // fetch typical CO2 emissions for a given route
   // The code below was taken from a post by Google: https://developers.google.com/travel/impact-model (last accessed 2025 07-27)
@@ -243,7 +209,7 @@ async function processFlightSearch({ departure, arrival, locationDeparture, loca
         }]
       }
     );
-  // END Copied Code 
+    // END Copied Code 
 
     // extract typical emissions data if available
     if (typicalResponse.data?.typicalFlightEmissions?.[0]?.emissionsGramsPerPax) {
@@ -255,132 +221,95 @@ async function processFlightSearch({ departure, arrival, locationDeparture, loca
     console.error("Typical Emissions API Error:", errorMessage);
   }
 
-  // primary: Amadeus Flight Offers Search API; secondary: Duffel Offers Requests API
+  // Duffel Offers Requests API
   let allFlightOffers = [];
-  let usingDuffel = false;
 
-  // try Amadeus API
   try {
-    console.log("Trying Amadeus flight search...");
+    console.log(`Using Duffel API for flight search... [${requestId}]`);
 
-    // search parameters for Amadeus API
-    const amadeusSearchParams = {
-      // origin airport code
-      originLocationCode: locationDeparture,
-      // destination airport code 
-      destinationLocationCode: locationArrival, 
-      // departure date 
-      departureDate: departure, 
-      // number of adult passengers
-      adults: adults, 
+    // parameters transformed for requesting to Duffel's API 
+    // build passengers array for Duffel API
+    const passengers = Array.from({ length: adults }, () => ({
+      type: 'adult'
+    }));
+
+    // build slices array for Duffel API
+    const slices = [{
+      origin: locationDeparture,
+      destination: locationArrival,
+      departure_date: departure
+    }];
+
+    // add return to slice if round trip
+    if (arrival) {
+      slices.push({
+        origin: locationArrival,
+        destination: locationDeparture,
+        departure_date: arrival
+      });
+    }
+
+    // search parameters for Duffel API
+    const duffelSearchParams = {
+      slices: slices,
+      passengers: passengers,
+      max_connections: 2
     };
 
-    // optional parameters 
-    // cabin class 
-    if (cabinClass) amadeusSearchParams.travelClass = cabinClass; 
-    // return date for round trips
-    if (arrival) amadeusSearchParams.returnDate = arrival; 
-
-    // call Amadeus Flight Offers Search API
-    // The code below was taken from a post by Amadeus: https://developers.amadeus.com/self-service/category/flights/api-doc/flight-offers-search (last accessed 2025 07-27)  
-    // BEGIN Copied Code 
-    const amadeusResponse = await amadeus.shopping.flightOffersSearch.get(amadeusSearchParams);
-    // END Copied Code 
-    allFlightOffers = amadeusResponse.data;
-    console.log(`Amadeus flight search successful: ${allFlightOffers.length} offers`);
-
-  } catch (amadeusError) {
-    console.log("Amadeus flight search failed, trying Duffel fallback...");
-    console.error("Amadeus error:", amadeusError.response ? amadeusError.response.data : amadeusError.message);
-
-    try {
-      // fallback to Duffel API
-      console.log(`Using Duffel API as fallback... [${requestId}]`);
-      usingDuffel = true;
-
-      // parameters transfomred for requesting to Duffel's API 
-      // build passengers array for Duffel API
-      const passengers = Array.from({ length: adults }, (_, i) => ({
-        type: 'adult'
-      }));
-
-      // build slices array for Duffel API
-      const slices = [{
-        origin: locationDeparture,
-        destination: locationArrival,
-        departure_date: departure
-      }];
-
-      // add return to slice if round trip
-      if (arrival) {
-        slices.push({
-          origin: locationArrival,
-          destination: locationDeparture,
-          departure_date: arrival
-        });
-      }
-
-      // search parameters for Duffel API
-      const duffelSearchParams = {
-        slices: slices,
-        passengers: passengers,
-        max_connections: 2 
-      };
-
-      // add cabin class
-      if (cabinClass) {
-        duffelSearchParams.cabin_class = cabinClass.toLowerCase();
-      }
-
-      // create Duffel's flight offer request
-      console.log("Creating Duffel offer request...");
-      // The code below was taken from a post by Duffel: https://duffel.com/docs/api/v2/offer-requests (last accessed 2025 07-27)
-      // BEGIN Copied Code
-      const offerRequest = await duffel.offerRequests.create(duffelSearchParams);
-      // END Copied Code
-
-      // get offers from the request
-      console.log(`Fetching offers from Duffel... [${requestId}]`);
-      const offersResponse = await duffel.offers.list({
-        offer_request_id: offerRequest.data.id,
-        // limit to 40 offers due to the limit of 120 requests per minute
-        limit: 40 
-      });
-
-      allFlightOffers = offersResponse.data;
-      console.log(`Duffel flight search fallback successful: ${allFlightOffers.length} offers [${requestId}]`);
-
-      // deduplicate Duffel offers 
-      const flightRouteMap = new Map();
-      const duplicateCount = allFlightOffers.length;
-
-      allFlightOffers.forEach(offer => {
-        // generate unique flight route key
-        const flightKey = offer.slices.map(slice =>
-          slice.segments.map(segment =>
-            `${segment.marketing_carrier.iata_code}${segment.marketing_carrier_flight_number}@${segment.departing_at}`
-          ).join('|')
-        ).join('||');
-
-        // keep only unique flight route
-        if (!flightRouteMap.has(flightKey)) {
-          flightRouteMap.set(flightKey, offer);
-        }
-      });
-      // convert back to array with only unique flight routes
-      allFlightOffers = Array.from(flightRouteMap.values());
-
-      const removedDuplicates = duplicateCount - allFlightOffers.length;
-      if (removedDuplicates > 0) {
-        // for debugging purpose
-        console.log(`[${requestId}] Removed ${removedDuplicates} duplicate flight routes, keeping ${allFlightOffers.length} unique offers`);
-      }
-
-    } catch (duffelError) {
-      console.error("Both Amadeus and Duffel flight search failed");
-      console.error("Duffel error:", duffelError.response ? duffelError.response.data : duffelError.message);
-      throw new Error('Failed to fetch flight offers from both APIs.');
+    // add cabin class
+    if (cabinClass) {
+      duffelSearchParams.cabin_class = cabinClass.toLowerCase();
     }
+
+    // create Duffel's flight offer request
+    console.log("Creating Duffel offer request...");
+    // The code below was taken from a post by Duffel: https://duffel.com/docs/api/v2/offer-requests (last accessed 2025 07-27)
+    // BEGIN Copied Code
+    const offerRequest = await duffel.offerRequests.create(duffelSearchParams);
+    // END Copied Code
+
+    // get offers from the request
+    console.log(`Fetching offers from Duffel... [${requestId}]`);
+    const offersResponse = await duffel.offers.list({
+      offer_request_id: offerRequest.data.id,
+      // limit to 40 offers due to the limit of 120 requests per minute
+      limit: 40
+    });
+
+    allFlightOffers = offersResponse.data;
+    console.log(`Duffel flight search successful: ${allFlightOffers.length} offers [${requestId}]`);
+
+    // deduplicate Duffel offers 
+    const flightRouteMap = new Map();
+    const duplicateCount = allFlightOffers.length;
+
+    allFlightOffers.forEach(offer => {
+      // generate unique flight route key
+      const flightKey = offer.slices.map(slice =>
+        slice.segments.map(segment =>
+          `${segment.marketing_carrier.iata_code}${segment.marketing_carrier_flight_number}@${segment.departing_at}`
+        ).join('|')
+      ).join('||');
+
+      // keep only unique flight route
+      if (!flightRouteMap.has(flightKey)) {
+        flightRouteMap.set(flightKey, offer);
+      }
+    });
+    // convert back to array with only unique flight routes
+    allFlightOffers = Array.from(flightRouteMap.values());
+
+    const removedDuplicates = duplicateCount - allFlightOffers.length;
+    if (removedDuplicates > 0) {
+      // for debugging purpose
+      console.log(`[${requestId}] Removed ${removedDuplicates} duplicate flight routes, keeping ${allFlightOffers.length} unique offers`);
+    }
+
+  } catch (error) {
+    console.error("Duffel flight search failed:");
+    console.error("Error details:", error.response ? error.response.data : error.message);
+    console.error("Full error:", error);
+    throw new Error('Failed to fetch flight offers from Duffel API.');
   }
 
   // group flight offers by unique itinerary to avoid duplicated CO2 calculations for identical flights
@@ -388,22 +317,13 @@ async function processFlightSearch({ departure, arrival, locationDeparture, loca
     if (allFlightOffers.length > 0) {
       const groupedOffers = {};
       allFlightOffers.forEach(offer => {
-        let flightKey;
-        if (usingDuffel) {
-          // Duffel data structure
-          flightKey = offer.slices.map(slice =>
-            slice.segments.map(segment =>
-              `${segment.marketing_carrier.iata_code}${segment.marketing_carrier_flight_number}@${segment.departing_at}`
-            ).join('|')
-          ).join('||');
-        } else {
-          // Amadeus data structure
-          flightKey = offer.itineraries.map(itinerary =>
-            itinerary.segments.map(segment =>
-              `${segment.carrierCode}${segment.number}@${segment.departure.at}`
-            ).join('|')
-          ).join('||');
-        }
+        // Duffel data structure
+        const flightKey = offer.slices.map(slice =>
+          slice.segments.map(segment =>
+            `${segment.marketing_carrier.iata_code}${segment.marketing_carrier_flight_number}@${segment.departing_at}`
+          ).join('|')
+        ).join('||');
+
         // group offers with the same flight itinerary
         if (!groupedOffers[flightKey]) groupedOffers[flightKey] = [];
         groupedOffers[flightKey].push(offer);
@@ -417,46 +337,24 @@ async function processFlightSearch({ departure, arrival, locationDeparture, loca
 
           // transform flight segments from Duffel data structure into Google Travel Impact Model API format 
           // in this case a segment means one leg of the journey
-          let flightsToCalculate;
-          if (usingDuffel) {
-            flightsToCalculate = representativeOffer.slices.flatMap(slice =>
-              slice.segments.map(segment => ({
-                // departure airport code
-                origin: segment.origin.iata_code, 
-                // arrival airport code
-                destination: segment.destination.iata_code, 
-                // airline code 
-                operatingCarrierCode: segment.operating_carrier.iata_code, 
-                // flight number
-                flightNumber: parseInt(segment.operating_carrier_flight_number), 
-                departureDate: {
-                  year: new Date(segment.departing_at).getFullYear(),
-                  // since no 0 month, we add 1 here
-                  month: new Date(segment.departing_at).getMonth() + 1, 
-                  day: new Date(segment.departing_at).getDate()
-                }
-              }))
-            );
-          } else {
-            // transform from Amadeus data structure into Google Travel Impact Model API format 
-            flightsToCalculate = representativeOffer.itineraries.flatMap(itinerary =>
-              itinerary.segments.map(segment => ({
-                // departure airport code
-                origin: segment.departure.iataCode, 
-                // arrival airport code
-                destination: segment.arrival.iataCode, 
-                // airline code 
-                operatingCarrierCode: segment.carrierCode, 
-                // flight number
-                flightNumber: parseInt(segment.number), 
-                departureDate: {
-                  year: new Date(segment.departure.at).getFullYear(),
-                  month: new Date(segment.departure.at).getMonth() + 1,
-                  day: new Date(segment.departure.at).getDate()
-                }
-              }))
-            );
-          }
+          const flightsToCalculate = representativeOffer.slices.flatMap(slice =>
+            slice.segments.map(segment => ({
+              // departure airport code
+              origin: segment.origin.iata_code,
+              // arrival airport code
+              destination: segment.destination.iata_code,
+              // airline code 
+              operatingCarrierCode: segment.operating_carrier.iata_code,
+              // flight number
+              flightNumber: parseInt(segment.operating_carrier_flight_number),
+              departureDate: {
+                year: new Date(segment.departing_at).getFullYear(),
+                // since no 0 month, we add 1 here
+                month: new Date(segment.departing_at).getMonth() + 1,
+                day: new Date(segment.departing_at).getDate()
+              }
+            }))
+          );
 
           // initialise variables to store emissions calculation results
           let emissionsData = null, availableCabins = [], completeness = false;
@@ -482,7 +380,7 @@ async function processFlightSearch({ departure, arrival, locationDeparture, loca
                     const emissionValue = flightEmission.emissionsGramsPerPax[key];
                     if (typeof emissionValue === 'number' && emissionValue > 0) {
                       // sum emissions across segments
-                      totalEmissions[key] += emissionValue; 
+                      totalEmissions[key] += emissionValue;
                       availableCabinsFromGoogle.add(key.replace('premiumEconomy', 'premium_economy').toUpperCase());
                     }
                   });
@@ -507,25 +405,23 @@ async function processFlightSearch({ departure, arrival, locationDeparture, loca
           // attach calculated emissions data to all offers in this group
           offersInGroup.forEach(offer => {
             // CO2 emissions per passenger by cabin class
-            offer.emissionsGramsPerPax = emissionsData; 
+            offer.emissionsGramsPerPax = emissionsData;
             // list of cabin classes with emissions data
-            offer.availableCabinClasses = availableCabins; 
+            offer.availableCabinClasses = availableCabins;
             // if all segments have complete data
-            offer.emissionsCompleteness = completeness; 
+            offer.emissionsCompleteness = completeness;
           });
         })
       );
-      // transform Duffel data to Amadeus format if needed, and return to frontend
-      if (usingDuffel) {
-        allFlightOffers = allFlightOffers.map(offer => transformDuffelToAmadeus(offer));
-        console.log(`Transformed ${allFlightOffers.length} Duffel offers to Amadeus format [${requestId}]`);
-      }
+      // transform Duffel data to expected format and return to frontend
+      allFlightOffers = allFlightOffers.map(offer => transformDuffelData(offer));
+      console.log(`Transformed ${allFlightOffers.length} Duffel offers [${requestId}]`);
 
       const responseData = {
         // flight offers CO2 emissions
-        offers: allFlightOffers, 
+        offers: allFlightOffers,
         // typical emissions for a given route 
-        typicalEmissions 
+        typicalEmissions
       };
 
       // cache the response to prevent duplicate requests

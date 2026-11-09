@@ -1,3 +1,32 @@
+# Visualising CO₂ Emissions from Commercial Flights
+
+VisCO₂Fly is a web application developed for my MSc Computer Science dissertation. It helps travellers understand and compare the environmental impact of their flight choices through interactive data visualisations.
+
+## About the project
+
+Flight emissions are often presented as raw numbers that can be difficult to interpret. VisCO₂Fly makes this information more meaningful by presenting emissions alongside flight details and putting them in the context of personal carbon budgets.
+
+## Features
+
+- Search for commercial flights and view their estimated CO₂ emissions.
+- Compare flights using interactive visualisations of emissions, price and duration.
+- Explore how emissions vary by cabin class.
+- View emissions in the context of a personal carbon budget.
+
+## Technologies
+
+- **Frontend:** React and D3.js
+- **Backend:** Node.js and Express
+- **Data:** Flight and emissions APIs
+
+## Evaluation
+
+The application was evaluated through a survey of 20 university students. Of those surveyed, 70% reported that the visualisations influenced their choice of a more environmentally friendly flight.
+
+## Dissertation
+
+This project was completed as part of my MSc in Computer Science at the University of St Andrews.
+
 ## Directory Structure
 
 There are two directories and two files:

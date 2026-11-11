@@ -1,3 +1,5 @@
+**[Try the live demo: vis-co2-fly.com](https://vis-co2-fly.com/)**
+
 # Visualising CO₂ Emissions from Commercial Flights
 
 VisCO₂Fly is a web application developed for my MSc Computer Science dissertation. It helps travellers understand and compare the environmental impact of their flight choices through interactive data visualisations.
